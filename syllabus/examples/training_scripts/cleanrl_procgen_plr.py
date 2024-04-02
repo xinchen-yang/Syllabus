@@ -21,7 +21,7 @@ from shimmy.openai_gym_compatibility import GymV21CompatibilityV0
 from torch.utils.tensorboard import SummaryWriter
 
 from syllabus.core import MultiProcessingSyncWrapper, make_multiprocessing_curriculum
-from syllabus.curricula import PrioritizedLevelReplay, DomainRandomization, LearningProgressCurriculum
+from syllabus.curricula import PrioritizedLevelReplay, DomainRandomization, LearningProgressCurriculum, SequentialCurriculum
 from syllabus.examples.models import ProcgenAgent
 from syllabus.examples.task_wrappers import ProcgenTaskWrapper
 from syllabus.examples.utils.vecenv import VecMonitor, VecNormalize
@@ -135,7 +135,7 @@ def make_env(env_id, seed, curriculum_components=None, start_level=0, num_levels
             env = MultiProcessingSyncWrapper(
                 env,
                 curriculum_components,
-                update_on_step=True,
+                update_on_step=False,
                 task_space=env.task_space,
                 buffer_size=4,
             )
@@ -200,12 +200,13 @@ def fast_level_replay_evaluate(
 
     # Choose evaluation seeds
     if num_levels == 0:
-        seeds = np.random.randint(0, 2**16-1, size=num_episodes)
+        seeds = np.random.randint(0, 2 ** 16 - 1, size=num_episodes)
     else:
         seeds = np.random.choice(np.arange(0, num_levels), size=num_episodes)
 
-    seed_envs = [(seed, env) for seed, env in zip(seeds, range(num_episodes))]
-    eval_obs, _ = eval_envs.reset(seed=seed_envs)
+    seed_envs = [(int(seed), env) for seed, env in zip(seeds, range(num_episodes))]
+    #eval_obs, _ = eval_envs.reset(seed=seed_envs)
+    eval_obs, _ = eval_envs.reset()
 
     eval_episode_rewards = [-1] * num_episodes
 
@@ -253,7 +254,7 @@ if __name__ == "__main__":
         )
         wandb.run.log_code(os.path.join(args.logging_dir, "/syllabus/examples"))
 
-    writer = SummaryWriter(os.path.join(args.logging_dir, "./runs/{run_name}"))
+    writer = SummaryWriter(os.path.join(args.logging_dir, f"./runs/{run_name}"))
     writer.add_text(
         "hyperparameters",
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
@@ -294,6 +295,16 @@ if __name__ == "__main__":
         elif args.curriculum_method == "lp":
             print("Using learning progress.")
             curriculum = LearningProgressCurriculum(sample_env.task_space)
+        elif args.curriculum_method == "sq":
+            print("Using sequential curriculum.")
+            curricula = []
+            stopping = []
+            for i in range(199):
+                curricula.append(i + 1)
+                stopping.append("steps>=50000")
+                curricula.append(list(range(i + 1)))
+                stopping.append("steps>=50000")
+            curriculum = SequentialCurriculum(curricula, stopping[:-1], sample_env.task_space)
         else:
             raise ValueError(f"Unknown curriculum method {args.curriculum_method}")
         curriculum = make_multiprocessing_curriculum(curriculum)
@@ -301,7 +312,8 @@ if __name__ == "__main__":
 
     # env setup
     print("Creating env")
-    envs = gym.vector.AsyncVectorEnv(
+    envs = gym.vector.SyncVectorEnv(
+    #envs = gym.vector.AsyncVectorEnv(
         [
             make_env(
                 args.env_id,
@@ -314,7 +326,8 @@ if __name__ == "__main__":
     )
     envs = wrap_vecenv(envs)
 
-    test_eval_envs = gym.vector.AsyncVectorEnv(
+    test_eval_envs = gym.vector.SyncVectorEnv(
+    #test_eval_envs = gym.vector.AsyncVectorEnv(
         [
             make_env(args.env_id, args.seed + i, num_levels=0)
             for i in range(args.num_eval_episodes)
@@ -322,7 +335,8 @@ if __name__ == "__main__":
     )
     test_eval_envs = wrap_vecenv(test_eval_envs)
 
-    train_eval_envs = gym.vector.AsyncVectorEnv(
+    train_eval_envs = gym.vector.SyncVectorEnv(
+    #train_eval_envs = gym.vector.AsyncVectorEnv(
         [
             make_env(args.env_id, args.seed + i, num_levels=200)
             for i in range(args.num_eval_episodes)
@@ -392,6 +406,12 @@ if __name__ == "__main__":
                     writer.add_scalar("charts/episodic_length", item["episode"]["l"], global_step)
                     if curriculum is not None:
                         curriculum.log_metrics(writer, global_step)
+
+                        # track return for individual tasks
+                        idx = info.index(item)
+                        multiprocessing_sync_wrapper_envs = envs.venv.venv.envs # extract envs of class MultiProcessingSyncWrapper from envs of class VecNormalize, which has access to task id
+                        episode_task = multiprocessing_sync_wrapper_envs[idx]._latest_task
+                        curriculum.update_on_episode(item["episode"]["r"], item["episode"]["l"], episode_task, args.env_id)
                     break
 
         # bootstrap value if not done
