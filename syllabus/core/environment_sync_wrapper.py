@@ -103,6 +103,8 @@ class MultiProcessingSyncWrapper(gym.Wrapper):
                 "request_sample": True,
             }
             self.components.put_update(update)
+        
+        info["task"] = self.task_space.encode(self.get_task())
 
         return obs, rew, term, trunc, info
 
