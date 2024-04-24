@@ -205,8 +205,8 @@ def fast_level_replay_evaluate(
         seeds = np.random.choice(np.arange(0, num_levels), size=num_episodes)
 
     seed_envs = [(int(seed), env) for seed, env in zip(seeds, range(num_episodes))]
-    eval_obs, _ = eval_envs.reset(seed=seed_envs)
-    #eval_obs, _ = eval_envs.reset()
+    #eval_obs, _ = eval_envs.reset(seed=seed_envs)
+    eval_obs, _ = eval_envs.reset()
 
     eval_episode_rewards = [-1] * num_episodes
 
